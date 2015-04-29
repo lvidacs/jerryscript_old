@@ -1662,43 +1662,85 @@ parse_variable_declaration_list (bool *several_decls)
 }
 
 static void
-parse_plain_for (void)
+skip_expression (void)
+{
+  /* This function accepts incorrect bracketed expressions
+  such as [ ( ] ). However, this is enough at this parsing
+  stage. Valid bracketed expressions are correctly skipped.
+  Incorrect ones will be captured by later parsing phases. */
+
+  if (token_is (TOK_OPEN_PAREN) || token_is (TOK_OPEN_BRACE)
+      || token_is (TOK_OPEN_SQUARE))
+  {
+    uint32_t nesting = 1;
+    do
+    {
+      skip_newlines ();
+      if (token_is (TOK_EOF))
+      {
+        return;
+      }
+
+      if (token_is (TOK_OPEN_PAREN) || token_is (TOK_OPEN_BRACE)
+          || token_is (TOK_OPEN_SQUARE))
+      {
+        nesting++;
+      }
+      else if (token_is (TOK_CLOSE_PAREN) || token_is (TOK_CLOSE_BRACE)
+               || token_is (TOK_CLOSE_SQUARE))
+      {
+        nesting--;
+      }
+    }
+    while (nesting != 0);
+  }
+
+  skip_newlines ();
+
+  if (token_is (TOK_EOF))
+  {
+    EMIT_ERROR ("Unexpected end of file");
+  }
+}
+
+static void
+parse_for_in (const locus start_loc)
 {
   /* Represent loop like
 
-     for (i = 0; i < 10; i++) {
+     for (i in obj) {
        body;
      }
 
      as
 
-  assign i, 0
+  tmp = eval(obj)
+  tmp = get_keys(tmp)
+  assign index, 0
   jmp_down %cond
 %body
   body
-  post_incr i
 %cond
-  less_than i, 10
-  is_true_jmp_up %body
-
+  compare index, len(tmp)
+  jump_if_not_less %end
+  tmp2 = tmp[index]
+  i = tmp2
+  jump %body
+%end
   */
+
+  JERRY_ASSERT (is_keyword (KW_IN));
+
+  const locus in_start_loc = tok.loc;
+  skip_newlines ();
+
+  const operand case_expr = parse_expression (true);
+
+  token_after_newlines_must_be (TOK_CLOSE_PAREN);
 
   dump_jump_to_end_for_rewrite ();
 
-  // Skip till body
-  JERRY_ASSERT (token_is (TOK_SEMICOLON));
-  skip_newlines ();
-  const locus cond_loc = tok.loc;
-  while (!token_is (TOK_SEMICOLON))
-  {
-    skip_newlines ();
-  }
-  skip_newlines ();
-  const locus incr_loc = tok.loc;
-  while (!token_is (TOK_CLOSE_PAREN))
-  {
-    skip_newlines ();
-  }
+  dump_smallint_assignment_res ();
 
   start_collecting_continues ();
   start_collecting_breaks ();
@@ -1714,26 +1756,21 @@ parse_plain_for (void)
 
   dumper_set_continue_target ();
 
-  lexer_seek (incr_loc);
+  // Set variable
+  lexer_seek (start_loc);
   skip_token ();
-  if (!token_is (TOK_CLOSE_PAREN))
+
+  operand this_arg = empty_operand (), prop = empty_operand ();
+  operand expr = parse_left_hand_side_expression (&this_arg, &prop);
+
+  syntax_check_for_eval_and_arguments_in_strict_mode (expr, is_strict_mode (), tok.loc);
+
+  if (tok.loc != in_start_loc)
   {
-    parse_expression (true);
+    EMIT_ERROR ("Invalid left hand side expression before 'in'");
   }
 
   rewrite_jump_to_end ();
-
-  lexer_seek (cond_loc);
-  skip_token ();
-  if (token_is (TOK_SEMICOLON))
-  {
-    dump_continue_iterations_check (empty_operand ());
-  }
-  else
-  {
-    const operand cond = parse_expression (true);
-    dump_continue_iterations_check (cond);
-  }
 
   dumper_set_break_target ();
   rewrite_breaks ();
@@ -1745,12 +1782,6 @@ parse_plain_for (void)
   {
     lexer_save_token (tok);
   }
-}
-
-static void
-parse_for_in (void)
-{
-  EMIT_SORRY ("'for in' loops are not supported yet");
 }
 
 /* for_statement
@@ -1779,62 +1810,147 @@ parse_for_or_for_in_statement (void)
   assert_keyword (KW_FOR);
   token_after_newlines_must_be (TOK_OPEN_PAREN);
 
+  /* Check whether we parse a for or for-in statement. */
   skip_newlines ();
-  if (token_is (TOK_SEMICOLON))
+
+  const locus start_loc = tok.loc;
+  do
   {
-    parse_plain_for ();
-    return;
-  }
-  /* Both for_statement_initialiser_part and for_in_statement_initialiser_part
-     contains 'var'. Check it first.  */
-  if (is_keyword (KW_VAR))
-  {
-    bool several_decls = false;
-    skip_newlines ();
-    parse_variable_declaration_list (&several_decls);
-    if (several_decls)
+    if (token_is (TOK_SEMICOLON))
     {
-      token_after_newlines_must_be (TOK_SEMICOLON);
-      parse_plain_for ();
+      break;
+    }
+
+    if (is_keyword (KW_IN))
+    {
+      /* This 'in' keyword separates the lvalue
+      and the expression part. */
+      parse_for_in (start_loc);
       return;
+    }
+
+    if (token_is (TOK_CLOSE_PAREN))
+    {
+      EMIT_ERROR ("Expected either ';' or 'in' token");
+    }
+
+    skip_expression ();
+  }
+  while (true);
+
+  /* Plain for case: represent loop like
+
+     for (i = 0; i < 10; i++) {
+       body;
+     }
+
+     as
+
+  assign i, 0
+  jmp_down %cond
+%body
+  body
+  post_incr i
+%cond
+  less_than i, 10
+  is_true_jmp_up %body
+
+  */
+
+  lexer_seek (start_loc);
+  skip_token ();
+
+  if (!token_is (TOK_SEMICOLON))
+  {
+    if (is_keyword (KW_VAR))
+    {
+      bool several_decls = false;
+      skip_newlines ();
+      parse_variable_declaration_list (&several_decls);
     }
     else
     {
-      skip_newlines ();
-      if (token_is (TOK_SEMICOLON))
-      {
-        parse_plain_for ();
-        return;
-      }
-      else if (is_keyword (KW_IN))
-      {
-        parse_for_in ();
-        return;
-      }
-      else
-      {
-        EMIT_ERROR ("Expected either ';' or 'in' token");
-      }
+      /* expression contains left_hand_side_expression.  */
+      parse_expression (false);
+    }
+    token_after_newlines_must_be (TOK_SEMICOLON);
+  }
+
+  skip_newlines ();
+  dump_jump_to_end_for_rewrite ();
+
+  // Skip till body
+  const locus cond_loc = tok.loc;
+  while (!token_is (TOK_SEMICOLON))
+  {
+    if (token_is (TOK_CLOSE_PAREN))
+    {
+      EMIT_ERROR ("Expected ';' token");
+    }
+    skip_expression ();
+  }
+  const locus cond_end_loc = tok.loc;
+  skip_newlines ();
+  const locus incr_loc = tok.loc;
+  while (!token_is (TOK_CLOSE_PAREN))
+  {
+    skip_expression ();
+  }
+  const locus incr_end_loc = tok.loc;
+
+  start_collecting_continues ();
+  start_collecting_breaks ();
+  dumper_set_next_interation_target ();
+
+  // Parse body
+  skip_newlines ();
+  push_nesting (NESTING_ITERATIONAL);
+  parse_statement ();
+  pop_nesting (NESTING_ITERATIONAL);
+
+  const locus end_loc = tok.loc;
+
+  dumper_set_continue_target ();
+
+  lexer_seek (incr_loc);
+  skip_token ();
+  if (!token_is (TOK_CLOSE_PAREN))
+  {
+    parse_expression (true);
+    if (tok.loc != incr_end_loc)
+    {
+      EMIT_ERROR ("Expected ')' token");
     }
   }
 
-  /* expression contains left_hand_side_expression.  */
-  parse_expression (false);
+  rewrite_jump_to_end ();
 
-  skip_newlines ();
+  lexer_seek (cond_loc);
+  skip_token ();
   if (token_is (TOK_SEMICOLON))
   {
-    parse_plain_for ();
-    return;
-  }
-  else if (is_keyword (KW_IN))
-  {
-    parse_for_in ();
-    return;
+    dump_continue_iterations_check (empty_operand ());
   }
   else
   {
-    EMIT_ERROR ("Expected either ';' or 'in' token");
+    const operand cond = parse_expression (true);
+    dump_continue_iterations_check (cond);
+    token_after_newlines_must_be (TOK_SEMICOLON);
+    if (tok.loc != cond_end_loc)
+    {
+      EMIT_ERROR ("Expected ';' token");
+    }
+  }
+
+  dumper_set_break_target ();
+  rewrite_breaks ();
+  rewrite_continues ();
+
+  lexer_seek (end_loc);
+  skip_token ();
+  if (tok.type != TOK_CLOSE_BRACE)
+  {
+    lexer_save_token (tok);
   }
 }
 
