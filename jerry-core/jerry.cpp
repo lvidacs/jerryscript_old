@@ -70,6 +70,11 @@ static bool jerry_api_available;
  */
 char jerry_extension_characters_buffer[CONFIG_EXTENSION_CHAR_BUFFER_SIZE];
 
+#ifdef JERRY_ENABLE_LOG
+int jerry_debug_level = 0;
+FILE *jerry_log_file = nullptr;
+#endif
+
 /**
  * Assert that it is correct to call API in current state.
  *
@@ -1044,6 +1049,13 @@ jerry_api_eval (const char *source_p, /**< source code */
 void
 jerry_init (jerry_flag_t flags) /**< combination of Jerry flags */
 {
+  if (flags & (JERRY_FLAG_ENABLE_LOG))
+  {
+#ifndef JERRY_ENABLE_LOG
+    printf ("Ignoring log options because of '!JERRY_ENABLE_LOG' build configuration.\n");
+#endif
+  }
+
   if (flags & (JERRY_FLAG_MEM_STATS))
   {
 #ifndef MEM_STATS
