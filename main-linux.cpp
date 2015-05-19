@@ -94,7 +94,7 @@ read_sources (const char *script_file_names[],
 
   if (i < files_count)
   {
-    printf ("Failed to read script N%d\n", i + 1);
+    fprintf (stderr, "Failed to read script N%d\n", i + 1);
 
     return NULL;
   }
@@ -114,7 +114,7 @@ main (int argc,
 {
   if (argc >= JERRY_MAX_COMMAND_LINE_ARGS)
   {
-    printf ("Too many command line arguments. Current maximum is %d (JERRY_MAX_COMMAND_LINE_ARGS)\n", argc);
+    fprintf (stderr, "Too many command line arguments. Current maximum is %d (JERRY_MAX_COMMAND_LINE_ARGS)\n", argc);
 
     return JERRY_STANDALONE_EXIT_CODE_FAIL;
   }
@@ -174,7 +174,7 @@ main (int argc,
       }
       else
       {
-        printf ("Error: wrong format or invalid argument\n");
+        fprintf (stderr, "Error: wrong format or invalid argument\n");
         return JERRY_STANDALONE_EXIT_CODE_FAIL;
       }
     }
@@ -189,7 +189,7 @@ main (int argc,
       }
       else
       {
-        printf ("Error: wrong format of the arguments\n");
+        fprintf (stderr, "Error: wrong format of the arguments\n");
         return JERRY_STANDALONE_EXIT_CODE_FAIL;
       }
     }
@@ -220,7 +220,7 @@ main (int argc,
         jerry_log_file = fopen (log_file_name, "w");
         if (jerry_log_file == nullptr)
         {
-          printf ("Failed to open log file: %s\n", log_file_name);
+          fprintf (stderr, "Failed to open log file: %s\n", log_file_name);
           return JERRY_STANDALONE_EXIT_CODE_FAIL;
         }
       }
